@@ -1,0 +1,793 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header class="hero hero-grid" id="top">
+    <section class="hero-copy">
+        <p class="eyebrow">IHERE LET'S GO!</p>
+        <h1>
+            {% if active_page == "home" %}Own the Money.{% endif %}
+            {% if active_page == "add" %}Add entries fast.{% endif %}
+            {% if active_page == "assistant" %}Ask your finance assistant.{% endif %}
+            {% if active_page == "history" %}Review and edit this cycle.{% endif %}
+            {% if active_page == "planner" %}Plan the next move.{% endif %}
+        </h1>
+        <p class="hero-text">
+            {% if active_page == "home" %}See the current cycle clearly and keep only the data you still need.{% endif %}
+            {% if active_page == "add" %}Log income and expenses fast for the current cycle.{% endif %}
+            {% if active_page == "assistant" %}Ask simple questions about this cycle, budgets, and recurring items.{% endif %}
+            {% if active_page == "history" %}Search, edit, and export only the current cycle records.{% endif %}
+            {% if active_page == "planner" %}Set cycle budgets, manage recurring items, and close the month cleanly.{% endif %}
+        </p>
+
+        <div class="hero-stats">
+            <div class="hero-stat">
+                <span>Cycle entries</span>
+                <strong>{{ transaction_count }}</strong>
+            </div>
+            <div class="hero-stat">
+                <span>Saved base</span>
+                <strong>{{ "{:,.2f}".format(balance_base) }} THB</strong>
+            </div>
+            <div class="hero-stat">
+                <span>Current cycle</span>
+                <strong>{{ selected_month }}</strong>
+            </div>
+        </div>
+    </section>
+
+    <aside class="command-card">
+        <div class="panel-head">
+            <h2>Pages</h2>
+            <p>Open only what you need.</p>
+        </div>
+        <nav class="page-nav">
+            <a href="{{ url_for('index', month=selected_month) }}" class="page-link {% if active_page == 'home' %}active{% endif %}">Home</a>
+            <a href="{{ url_for('add_entry_page', month=selected_month) }}" class="page-link {% if active_page == 'add' %}active{% endif %}">Add</a>
+            <a href="{{ url_for('assistant_page', month=selected_month) }}" class="page-link {% if active_page == 'assistant' %}active{% endif %}">AI</a>
+            <a href="{{ url_for('history_page', month=selected_month, query=filters['query'], type=filters['type'], category=filters['category']) }}" class="page-link {% if active_page == 'history' %}active{% endif %}">History</a>
+            <a href="{{ url_for('planner_page', month=selected_month) }}" class="page-link {% if active_page == 'planner' %}active{% endif %}">Planner</a>
+        </nav>
+        <form class="month-filter" method="get" action="{% if active_page == 'add' %}{{ url_for('add_entry_page') }}{% elif active_page == 'assistant' %}{{ url_for('assistant_page') }}{% elif active_page == 'history' %}{{ url_for('history_page') }}{% elif active_page == 'planner' %}{{ url_for('planner_page') }}{% else %}{{ url_for('index') }}{% endif %}">
+            <input type="hidden" name="query" value="{{ filters['query'] }}">
+            <input type="hidden" name="type" value="{{ filters['type'] }}">
+            <input type="hidden" name="category" value="{{ filters['category'] }}">
+            <label for="month">Month</label>
+            <input id="month" name="month" type="month" value="{{ selected_month }}">
+            <button type="submit">Update</button>
+        </form>
+    </aside>
+</header>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+        <section class="alerts">
+            {% for category, message in messages %}
+                <div class="alert {{ category }}">{{ message }}</div>
+            {% endfor %}
+        </section>
+    {% endif %}
+{% endwith %}
+
+{% if active_page == "home" %}
+    <section class="top-metrics">
+        <article class="metric-chip">
+            <span class="metric-icon">$</span>
+            <div>
+                <small>Overall</small>
+                <strong>{{ "{:,.2f}".format(display_overall_balance) }} THB</strong>
+            </div>
+        </article>
+        <article class="metric-chip">
+            <span class="metric-icon">~</span>
+            <div>
+                <small>Cycle carry</small>
+                <strong>{{ "{:,.2f}".format(carry_over_balance) }} THB</strong>
+            </div>
+        </article>
+        <article class="metric-chip">
+            <span class="metric-icon">#</span>
+            <div>
+                <small>All entries</small>
+                <strong>{{ overall_entries }}</strong>
+            </div>
+        </article>
+    </section>
+
+    <section class="summary-grid">
+        <article class="summary-card income">
+            <span>Income</span>
+            <strong>{{ "{:,.2f}".format(total_income) }} THB</strong>
+            <small>All money in for the selected month.</small>
+        </article>
+        <article class="summary-card expense">
+            <span>Expense</span>
+            <strong>{{ "{:,.2f}".format(total_expense) }} THB</strong>
+            <small>All money out for the selected month.</small>
+        </article>
+        <article class="summary-card balance">
+            <span>Balance</span>
+            <strong>{{ "{:,.2f}".format(balance) }} THB</strong>
+            <small>Income minus expense.</small>
+        </article>
+    </section>
+
+    <section class="chart-grid">
+        <section class="panel chart-panel">
+            <div class="panel-head">
+                <h2>Daily flow</h2>
+                <p>Income and expense by day.</p>
+            </div>
+            <div class="chart-stage">
+                <div id="dailyChart" class="bar-chart"></div>
+            </div>
+            <div class="chart-legend">
+                <span><i class="legend-dot income"></i>Income</span>
+                <span><i class="legend-dot expense"></i>Expense</span>
+            </div>
+        </section>
+
+        <section class="panel chart-panel">
+            <div class="panel-head">
+                <h2>Expense mix</h2>
+                <p>Where spending goes.</p>
+            </div>
+            <div class="donut-wrap">
+                <div id="donutChart" class="donut-chart"></div>
+                <div id="donutCenter" class="donut-center">No data</div>
+            </div>
+            <div id="donutLegend" class="donut-legend"></div>
+        </section>
+    </section>
+
+    <section class="workspace-grid">
+        <section class="panel ai-panel">
+            <div class="panel-head">
+                <h2>AI highlights</h2>
+                <p>Quick signals from the current cycle.</p>
+            </div>
+            <div class="ai-list">
+                {% for insight in ai_insights %}
+                    <article class="ai-card {{ insight['tone'] }}">
+                        <h3>{{ insight["title"] }}</h3>
+                        <p>{{ insight["body"] }}</p>
+                    </article>
+                {% endfor %}
+            </div>
+        </section>
+
+        <section class="panel spotlight-panel">
+            <div class="panel-head">
+                <h2>Largest expense</h2>
+                <p>Quick view of the biggest outgoing item.</p>
+            </div>
+            {% if top_expense %}
+                <div class="spotlight-grid">
+                    <div class="spotlight-card">
+                        <span>Title</span>
+                        <strong>{{ top_expense["title"] }}</strong>
+                        <small>{{ top_expense["category"] }} | {{ top_expense["transaction_date"] }}</small>
+                    </div>
+                    <div class="spotlight-card emphasis">
+                        <span>Amount</span>
+                        <strong>{{ "{:,.2f}".format(top_expense["amount"]) }} THB</strong>
+                        <small>Useful for budget planning.</small>
+                    </div>
+                </div>
+            {% else %}
+                <div class="empty-state">No large expense yet.</div>
+            {% endif %}
+        </section>
+    </section>
+{% endif %}
+
+{% if active_page == "add" %}
+    <section class="workspace-grid single-focus">
+        <section class="panel entry-panel">
+            <div class="panel-head">
+                <h2>Add entry</h2>
+                <p>Fast daily logging for income and expenses.</p>
+            </div>
+
+            <form class="entry-form" method="post" action="{{ url_for('add_transaction') }}">
+                <input type="hidden" name="redirect_month" value="{{ selected_month }}">
+
+                <div class="quick-type-toggle">
+                    <button type="button" class="type-chip active" data-type="income">Income</button>
+                    <button type="button" class="type-chip" data-type="expense">Expense</button>
+                </div>
+
+                <input id="transaction_type_input" type="hidden" name="transaction_type" value="income">
+
+                <div class="split">
+                    <label>
+                        Title
+                        <input type="text" name="title" placeholder="Salary, lunch, fuel" required>
+                    </label>
+
+                    <label>
+                        Amount
+                        <input type="number" name="amount" placeholder="0.00" min="0.01" step="0.01" required>
+                    </label>
+                </div>
+
+                <div class="split triple">
+                    <label>
+                        Category
+                        <select name="category">
+                            {% for item in income_categories %}
+                                <option value="{{ item }}">{{ item }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+
+                    <label>
+                        Date
+                        <input type="date" name="transaction_date" value="{{ default_date }}" required>
+                    </label>
+
+                    <label>
+                        Month
+                        <input type="text" value="{{ selected_month }}" readonly>
+                    </label>
+                </div>
+
+                <label>
+                    Note
+                    <textarea name="note" rows="3" placeholder="Optional note"></textarea>
+                </label>
+
+                <div class="form-footer">
+                    <p class="form-tip">Totals update right away.</p>
+                    <button class="primary-button" type="submit">Save</button>
+                </div>
+            </form>
+        </section>
+    </section>
+{% endif %}
+
+{% if active_page == "assistant" %}
+    <section class="workspace-grid single-focus">
+        <section class="panel ai-panel">
+            <div class="panel-head">
+                <h2>AI assistant</h2>
+                <p>Ask about the current cycle, budgets, or recurring items.</p>
+            </div>
+
+            <div class="ai-list compact">
+                {% for insight in ai_insights %}
+                    <article class="ai-card {{ insight['tone'] }}">
+                        <h3>{{ insight["title"] }}</h3>
+                        <p>{{ insight["body"] }}</p>
+                    </article>
+                {% endfor %}
+            </div>
+
+            <form id="assistantForm" class="assistant-form">
+                <input type="hidden" id="assistantMonth" value="{{ selected_month }}">
+                <label>
+                    Ask
+                    <input id="assistantQuestion" type="text" placeholder="What did I spend most on this cycle?">
+                </label>
+                <button class="primary-button" type="submit">Ask AI</button>
+            </form>
+            <div id="assistantAnswer" class="assistant-answer">Try: What did I spend most on this cycle?</div>
+        </section>
+    </section>
+{% endif %}
+
+{% if active_page == "planner" %}
+    <section class="planner-grid">
+        <section class="panel">
+            <div class="panel-head">
+                <h2>Budget limits</h2>
+                <p>Set a budget for a category and track progress.</p>
+            </div>
+            <form class="mini-form" method="post" action="{{ url_for('save_budget') }}">
+                <input type="hidden" name="budget_month" value="{{ selected_month }}">
+                <label>
+                    Category
+                    <select name="category">
+                        {% for item in expense_categories %}
+                            <option value="{{ item }}">{{ item }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>
+                    Amount
+                    <input type="number" name="amount" min="0.01" step="0.01" placeholder="3000" required>
+                </label>
+                <button class="primary-button" type="submit">Save budget</button>
+            </form>
+
+            {% if budget_progress %}
+                <div class="budget-list">
+                    {% for item in budget_progress %}
+                        <article class="budget-card {{ item['status'] }}">
+                            <div class="budget-head">
+                                <strong>{{ item["category"] }}</strong>
+                                <span>{{ item["usage"]|round(0)|int }}%</span>
+                            </div>
+                            <div class="progress-track">
+                                <div class="progress-fill {{ item['status'] }}" style="width: {{ [item['usage'], 100]|min }}%"></div>
+                            </div>
+                            <small>Spent {{ "{:,.2f}".format(item["spent"]) }} / {{ "{:,.2f}".format(item["budget"]) }} THB</small>
+                        </article>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="empty-state">No budgets set for this month.</div>
+            {% endif %}
+        </section>
+
+        <section class="panel">
+            <div class="panel-head">
+                <h2>Recurring items</h2>
+                <p>Create monthly items and apply them in one tap.</p>
+            </div>
+            <form class="mini-form recurring-form" method="post" action="{{ url_for('save_recurring_item') }}">
+                <input type="hidden" name="redirect_month" value="{{ selected_month }}">
+                <label>
+                    Title
+                    <input type="text" name="title" placeholder="Rent, salary, internet" required>
+                </label>
+                <label>
+                    Amount
+                    <input type="number" name="amount" min="0.01" step="0.01" required>
+                </label>
+                <label>
+                    Type
+                    <select name="transaction_type">
+                        <option value="expense">Expense</option>
+                        <option value="income">Income</option>
+                    </select>
+                </label>
+                <label>
+                    Category
+                    <select name="category">
+                        {% for item in all_categories %}
+                            <option value="{{ item }}">{{ item }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>
+                    Day
+                    <input type="number" name="day_of_month" min="1" max="28" value="1" required>
+                </label>
+                <label class="full">
+                    Note
+                    <input type="text" name="note" placeholder="Optional note">
+                </label>
+                <button class="primary-button" type="submit">Add recurring</button>
+            </form>
+
+            <form method="post" action="{{ url_for('apply_recurring_items') }}">
+                <input type="hidden" name="redirect_month" value="{{ selected_month }}">
+                <button class="ghost-button full-width" type="submit">Apply for {{ selected_month }}</button>
+            </form>
+
+            {% if recurring_items %}
+                <div class="recurring-list">
+                    {% for item in recurring_items %}
+                        <article class="recurring-card {% if item['is_active'] %}active{% else %}inactive{% endif %}">
+                            <div>
+                                <strong>{{ item["title"] }}</strong>
+                                <small>{{ item["transaction_type"]|title }} | {{ item["category"] }} | Day {{ item["day_of_month"] }}</small>
+                            </div>
+                            <div class="recurring-meta">
+                                <span>{{ "{:,.2f}".format(item["amount"]) }} THB</span>
+                                <form method="post" action="{{ url_for('toggle_recurring_item', item_id=item['id']) }}">
+                                    <input type="hidden" name="redirect_month" value="{{ selected_month }}">
+                                    <button class="toggle-button" type="submit">
+                                        {{ "Pause" if item["is_active"] else "Resume" }}
+                                    </button>
+                                </form>
+                            </div>
+                        </article>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="empty-state">No recurring items yet.</div>
+            {% endif %}
+        </section>
+    </section>
+
+    <section class="panel reset-panel">
+        <div class="panel-head">
+            <h2>Close cycle</h2>
+            <p>Save this cycle into your base and move forward with only the essentials.</p>
+        </div>
+
+        <div class="reset-grid">
+            <article class="reset-card">
+                <strong>Close {{ selected_month }}</strong>
+                <p>Net results are added to your saved base. Transactions are cleared, recurring stays active, and budgets are copied to {{ next_month }}.</p>
+                <form method="post" action="{{ url_for('reset_history') }}">
+                    <input type="hidden" name="redirect_month" value="{{ selected_month }}">
+                    <button class="ghost-button warning" type="submit">Close cycle</button>
+                </form>
+            </article>
+        </div>
+
+        <div class="reset-summary">
+            <span>Saved balance base</span>
+            <strong>{{ "{:,.2f}".format(balance_base) }} THB</strong>
+        </div>
+    </section>
+{% endif %}
+
+{% if active_page == "history" %}
+    <section class="panel filter-panel">
+        <div class="panel-head">
+            <h2>Search and filter</h2>
+            <p>Narrow the current cycle before editing or exporting.</p>
+        </div>
+        <form class="filter-form" method="get" action="{{ url_for('history_page') }}">
+            <input type="hidden" name="month" value="{{ selected_month }}">
+            <label>
+                Search
+                <input type="text" name="query" placeholder="Title or note" value="{{ filters['query'] }}">
+            </label>
+            <label>
+                Type
+                <select name="type">
+                    <option value="">All</option>
+                    <option value="income" {% if filters['type'] == 'income' %}selected{% endif %}>Income</option>
+                    <option value="expense" {% if filters['type'] == 'expense' %}selected{% endif %}>Expense</option>
+                </select>
+            </label>
+            <label>
+                Category
+                <select name="category">
+                    <option value="">All</option>
+                    {% for item in all_categories %}
+                        <option value="{{ item }}" {% if filters['category'] == item %}selected{% endif %}>{{ item }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <div class="filter-actions">
+                <button class="primary-button" type="submit">Apply</button>
+                <a class="ghost-button" href="{{ url_for('history_page', month=selected_month) }}">Clear</a>
+            </div>
+        </form>
+    </section>
+
+    <section class="panel export-panel">
+        <div class="panel-head">
+            <h2>Export</h2>
+            <p>Download current cycle results as CSV.</p>
+        </div>
+        <a class="ghost-button export-link" href="{{ url_for('export_csv', month=selected_month, query=filters['query'], type=filters['type'], category=filters['category']) }}">Export CSV</a>
+    </section>
+
+    <section class="panel table-panel">
+        <div class="panel-head">
+            <h2>History</h2>
+            <p>Only current cycle records are kept here.</p>
+        </div>
+
+        {% if transactions %}
+            <div class="table-wrap desktop-only">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Title</th>
+                            <th>Type</th>
+                            <th>Category</th>
+                            <th>Amount</th>
+                            <th>Note</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in transactions %}
+                            <tr>
+                                <td>{{ item["transaction_date"] }}</td>
+                                <td>{{ item["title"] }}</td>
+                                <td><span class="pill {{ item['transaction_type'] }}">{{ item["transaction_type"]|title }}</span></td>
+                                <td>{{ item["category"] }}</td>
+                                <td>{{ "{:,.2f}".format(item["amount"]) }}</td>
+                                <td>{{ item["note"] or "-" }}</td>
+                                <td>
+                                    <div class="action-row">
+                                        <button
+                                            type="button"
+                                            class="ghost-button small edit-button"
+                                            data-id="{{ item['id'] }}"
+                                            data-title="{{ item['title'] }}"
+                                            data-amount="{{ item['amount'] }}"
+                                            data-type="{{ item['transaction_type'] }}"
+                                            data-category="{{ item['category'] }}"
+                                            data-note="{{ item['note'] or '' }}"
+                                            data-date="{{ item['transaction_date'] }}"
+                                        >
+                                            Edit
+                                        </button>
+                                        <form method="post" action="{{ url_for('delete_transaction', transaction_id=item['id']) }}">
+                                            <input type="hidden" name="redirect_month" value="{{ selected_month }}">
+                                            <button class="delete-button" type="submit">Delete</button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="history-cards mobile-only">
+                {% for item in transactions %}
+                    <article class="history-card">
+                        <div class="history-head">
+                            <strong>{{ item["title"] }}</strong>
+                            <span>{{ "{:,.2f}".format(item["amount"]) }} THB</span>
+                        </div>
+                        <div class="history-meta">
+                            <span>{{ item["transaction_date"] }}</span>
+                            <span>{{ item["category"] }}</span>
+                            <span class="pill {{ item['transaction_type'] }}">{{ item["transaction_type"]|title }}</span>
+                        </div>
+                        <p>{{ item["note"] or "No note" }}</p>
+                        <div class="action-row">
+                            <button
+                                type="button"
+                                class="ghost-button small edit-button"
+                                data-id="{{ item['id'] }}"
+                                data-title="{{ item['title'] }}"
+                                data-amount="{{ item['amount'] }}"
+                                data-type="{{ item['transaction_type'] }}"
+                                data-category="{{ item['category'] }}"
+                                data-note="{{ item['note'] or '' }}"
+                                data-date="{{ item['transaction_date'] }}"
+                            >
+                                Edit
+                            </button>
+                            <form method="post" action="{{ url_for('delete_transaction', transaction_id=item['id']) }}">
+                                <input type="hidden" name="redirect_month" value="{{ selected_month }}">
+                                <button class="delete-button" type="submit">Delete</button>
+                            </form>
+                        </div>
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="empty-state">No entries match your current filters.</div>
+        {% endif %}
+    </section>
+{% endif %}
+
+<dialog id="editDialog" class="edit-dialog">
+    <form id="editForm" class="entry-form" method="post">
+        <input type="hidden" name="redirect_month" value="{{ selected_month }}">
+        <div class="dialog-head">
+            <h2>Edit entry</h2>
+            <button type="button" class="ghost-button small" id="closeEditDialog">Close</button>
+        </div>
+
+        <div class="split">
+            <label>
+                Title
+                <input type="text" name="title" id="editTitle" required>
+            </label>
+            <label>
+                Amount
+                <input type="number" name="amount" id="editAmount" min="0.01" step="0.01" required>
+            </label>
+        </div>
+
+        <div class="split triple">
+            <label>
+                Type
+                <select name="transaction_type" id="editType">
+                    <option value="income">Income</option>
+                    <option value="expense">Expense</option>
+                </select>
+            </label>
+            <label>
+                Category
+                <select name="category" id="editCategory">
+                    {% for item in all_categories %}
+                        <option value="{{ item }}">{{ item }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                Date
+                <input type="date" name="transaction_date" id="editDate" required>
+            </label>
+        </div>
+
+        <label>
+            Note
+            <textarea name="note" id="editNote" rows="3"></textarea>
+        </label>
+
+        <button class="primary-button" type="submit">Save changes</button>
+    </form>
+</dialog>
+
+<script>
+    const chartData = {{ chart_data|tojson }};
+    const selectedMonth = {{ selected_month|tojson }};
+    const typeInput = document.querySelector("#transaction_type_input");
+    const typeChips = document.querySelectorAll(".type-chip");
+    const categorySelect = document.querySelector('select[name="category"]');
+    const incomeCategories = {{ income_categories|tojson }};
+    const expenseCategories = {{ expense_categories|tojson }};
+    const allCategories = {{ all_categories|tojson }};
+
+    function categoriesFor(type) {
+        return type === "expense" ? expenseCategories : incomeCategories;
+    }
+
+    if (typeInput && categorySelect) {
+        function renderCategories(type) {
+            const items = categoriesFor(type);
+            categorySelect.innerHTML = "";
+            items.forEach((item) => {
+                const option = document.createElement("option");
+                option.value = item;
+                option.textContent = item;
+                categorySelect.appendChild(option);
+            });
+        }
+
+        function setType(type) {
+            typeInput.value = type;
+            typeChips.forEach((button) => {
+                button.classList.toggle("active", button.dataset.type === type);
+            });
+            renderCategories(type);
+        }
+
+        typeChips.forEach((button) => {
+            button.addEventListener("click", () => setType(button.dataset.type));
+        });
+
+        setType(typeInput.value);
+    }
+
+    function renderBarChart() {
+        const host = document.querySelector("#dailyChart");
+        if (!host) return;
+        const labels = chartData.labels || [];
+        const income = chartData.income || [];
+        const expense = chartData.expense || [];
+        const maxValue = Math.max(1, ...income, ...expense);
+
+        if (!labels.length) {
+            host.innerHTML = '<div class="chart-empty">No chart data yet.</div>';
+            return;
+        }
+
+        host.innerHTML = labels.map((label, index) => {
+            const incomeHeight = (income[index] / maxValue) * 100;
+            const expenseHeight = (expense[index] / maxValue) * 100;
+            return `
+                <div class="bar-group">
+                    <div class="bar-stack">
+                        <div class="bar income" style="height:${incomeHeight}%"></div>
+                        <div class="bar expense" style="height:${expenseHeight}%"></div>
+                    </div>
+                    <span>${label}</span>
+                </div>
+            `;
+        }).join("");
+    }
+
+    function renderDonutChart() {
+        const chart = document.querySelector("#donutChart");
+        const legend = document.querySelector("#donutLegend");
+        const center = document.querySelector("#donutCenter");
+        if (!chart || !legend || !center) return;
+        const items = chartData.categories || [];
+        const colors = ["#f3cc77", "#ff8d6f", "#8db7ff", "#6dd3a1", "#d58cff", "#72d5ff"];
+
+        if (!items.length) {
+            chart.style.background = "conic-gradient(rgba(255,255,255,0.08) 0 100%)";
+            legend.innerHTML = '<div class="chart-empty">No expense data yet.</div>';
+            center.textContent = "No data";
+            return;
+        }
+
+        const total = items.reduce((sum, item) => sum + item.value, 0);
+        let current = 0;
+        const segments = items.map((item, index) => {
+            const start = current;
+            const part = (item.value / total) * 100;
+            current += part;
+            return `${colors[index % colors.length]} ${start}% ${current}%`;
+        });
+
+        chart.style.background = `conic-gradient(${segments.join(", ")})`;
+        center.textContent = `THB ${total.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        legend.innerHTML = items.map((item, index) => {
+            const share = total > 0 ? (item.value / total) * 100 : 0;
+            return `
+                <div class="donut-item">
+                    <span><i class="legend-dot" style="background:${colors[index % colors.length]}"></i>${item.label}</span>
+                    <strong>${share.toFixed(0)}%</strong>
+                </div>
+            `;
+        }).join("");
+    }
+
+    const assistantForm = document.querySelector("#assistantForm");
+    const assistantQuestion = document.querySelector("#assistantQuestion");
+    const assistantAnswer = document.querySelector("#assistantAnswer");
+
+    if (assistantForm && assistantQuestion && assistantAnswer) {
+        assistantForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            assistantAnswer.textContent = "Thinking...";
+
+            const response = await fetch("{{ url_for('assistant') }}", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    question: assistantQuestion.value,
+                    month: selectedMonth,
+                }),
+            });
+
+            const data = await response.json();
+            assistantAnswer.textContent = data.answer;
+        });
+    }
+
+    const editDialog = document.querySelector("#editDialog");
+    const editForm = document.querySelector("#editForm");
+    const editTitle = document.querySelector("#editTitle");
+    const editAmount = document.querySelector("#editAmount");
+    const editType = document.querySelector("#editType");
+    const editCategory = document.querySelector("#editCategory");
+    const editDate = document.querySelector("#editDate");
+    const editNote = document.querySelector("#editNote");
+    const closeEditDialog = document.querySelector("#closeEditDialog");
+
+    function renderEditCategories(type, selectedCategory) {
+        const items = categoriesFor(type);
+        editCategory.innerHTML = "";
+        items.forEach((item) => {
+            const option = document.createElement("option");
+            option.value = item;
+            option.textContent = item;
+            option.selected = item === selectedCategory;
+            editCategory.appendChild(option);
+        });
+        if (!items.includes(selectedCategory) && allCategories.includes(selectedCategory)) {
+            const extra = document.createElement("option");
+            extra.value = selectedCategory;
+            extra.textContent = selectedCategory;
+            extra.selected = true;
+            editCategory.appendChild(extra);
+        }
+    }
+
+    if (editType) {
+        editType.addEventListener("change", () => renderEditCategories(editType.value, editCategory.value));
+    }
+
+    document.querySelectorAll(".edit-button").forEach((button) => {
+        button.addEventListener("click", () => {
+            editForm.action = `/edit/${button.dataset.id}`;
+            editTitle.value = button.dataset.title;
+            editAmount.value = button.dataset.amount;
+            editType.value = button.dataset.type;
+            renderEditCategories(button.dataset.type, button.dataset.category);
+            editDate.value = button.dataset.date;
+            editNote.value = button.dataset.note;
+            editDialog.showModal();
+        });
+    });
+
+    if (closeEditDialog) {
+        closeEditDialog.addEventListener("click", () => editDialog.close());
+    }
+
+    renderBarChart();
+    renderDonutChart();
+</script>
+{% endblock %}
